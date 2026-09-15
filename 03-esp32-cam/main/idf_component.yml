@@ -1,0 +1,6 @@
+# ESP32-CAM 组件依赖（预留）
+# esp32-camera 是外部组件，需通过 idf_component.yml 声明，idf.py reconfigure 自动拉取。
+# 对应架构文档: docs/ARCHITECTURE.md §6.4
+dependencies:
+  espressif/esp32-camera: "^2.0.0"
+  idf: ">=5.0"

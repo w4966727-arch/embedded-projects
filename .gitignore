@@ -1,0 +1,32 @@
+#    编译产物
+build/
+**/build/
+managed_components/
+*.o
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+
+#   敏感配置
+tools/
+FreeRTOS-Kernel/
+common/Drivers/
+common/CMSIS/
+common/FreeRTOS/
+common/Startup/
+common/Linker/
+common/Core/
+
+#   编辑器/系统垃圾
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+#   本地配置
+sdkconfig
+sdkconfig.old

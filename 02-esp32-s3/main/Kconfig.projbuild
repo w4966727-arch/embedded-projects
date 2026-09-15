@@ -1,0 +1,136 @@
+# ESP32-S3 工程配置项（预留）
+# 实施时在 menuconfig 里填写实际值：idf.py menuconfig
+# 对应架构文档: docs/ARCHITECTURE.md §8 §12
+
+menu "WiFi Configuration"
+    config WIFI_SSID
+        string "WIFI SSID"
+        default "DESKTOP-E63MFTM 9618"
+
+    config WIFI_PASSWORD
+        string "WIFI PASSWORD"
+        default "12121212"
+
+    config WIFI_STATIC_IP
+        bool "Use static IP"
+        default n
+
+    config WIFI_IP_ADDR
+        string "Static IP address"
+        default "192.168.137.100"
+        depends on WIFI_STATIC_IP
+
+    config WIFI_NETMASK
+        string "Netmask"
+        default "255.255.255.0"
+        depends on WIFI_STATIC_IP
+
+    config WIFI_GW
+        string "Gateway"
+        default "192.168.137.1"
+        depends on WIFI_STATIC_IP
+
+    config WIFI_DNS_MAIN
+        string "Main DNS server"
+        default "223.5.5.5"
+        depends on WIFI_STATIC_IP
+
+    config WIFI_DNS_BACKUP
+        string "Backup DNS server"
+        default "114.114.114.114"
+        depends on WIFI_STATIC_IP
+    
+endmenu
+
+menu "MQTT Configuration"
+    config MQTT_BROKER_URI
+        string "MQTT broker URI"
+        default "mqtt://192.168.137.1:1833"
+
+    config MQTT_CLIENT_ID
+        string "MQTT client id"
+        default "esp32s3-hub"
+endmenu
+
+menu "Cloud LLM (text chat)"
+    config LLM_ENABLE
+        bool "Enable cloud LLM text chat"
+        default y
+
+    config LLM_BASE_URL
+        string "LLM API base URL (OpenAI compatible)"
+        default "https://api.deepseek.com/v1/chat/completions"
+        depends on LLM_ENABLE
+
+    config LLM_API_KEY
+        string "LLM API Key"
+        default ""
+        depends on LLM_ENABLE
+
+    config LLM_MODEL
+        string "LLM model name"
+        default "deepseek-chat"
+        depends on LLM_ENABLE
+
+    config LLM_MAX_TOKENS
+        int "LLM max response tokens"
+        default 200
+        range 16 2048
+        depends on LLM_ENABLE
+endmenu
+
+menu "Vision VLM (image to text, via relay)"
+    config VLM_ENABLE
+        bool "Enable vision VLM via relay"
+        default n
+
+    config VLM_BASE_URL
+        string "VLM API base URL (relay, OpenAI compatible)"
+        default ""
+        depends on VLM_ENABLE
+
+    config VLM_API_KEY
+        string "VLM API Key (relay)"
+        default ""
+        depends on VLM_ENABLE
+
+    config VLM_MODEL
+        string "VLM model name (e.g. gpt-4o-mini)"
+        default ""
+        depends on VLM_ENABLE
+endmenu
+
+# ============================================================
+# 语音链路预留（ASR / TTS）
+# 服务商未定，先注释占位。定了之后取消注释并填默认值。
+# 代码侧对应 llm_task 里的 asr_upload() / tts_play() 空桩。
+# ============================================================
+# menu "Speech (ASR / TTS) - reserved"
+#     config ASR_ENABLE
+#         bool "Enable ASR (speech to text)"
+#         default n
+#
+#     config ASR_BASE_URL
+#         string "ASR API base URL"
+#         default ""
+#         depends on ASR_ENABLE
+#
+#     config ASR_API_KEY
+#         string "ASR API Key"
+#         default ""
+#         depends on ASR_ENABLE
+#
+#     config TTS_ENABLE
+#         bool "Enable TTS (text to speech)"
+#         default n
+#
+#     config TTS_BASE_URL
+#         string "TTS API base URL"
+#         default ""
+#         depends on TTS_ENABLE
+#
+#     config TTS_API_KEY
+#         string "TTS API Key"
+#         default ""
+#         depends on TTS_ENABLE
+# endmenu
