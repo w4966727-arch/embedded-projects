@@ -1,4 +1,4 @@
-#    编译产物
+# ============ 编译产物 ============
 build/
 **/build/
 managed_components/
@@ -9,9 +9,10 @@ managed_components/
 *.map
 *.lst
 
-#   敏感配置
+# ============ 第三方源码与工具链（不入库，来源见 docs/DEPS.md）============
 tools/
 FreeRTOS-Kernel/
+stm32f4xx-hal-driver/
 common/Drivers/
 common/CMSIS/
 common/FreeRTOS/
@@ -19,14 +20,17 @@ common/Startup/
 common/Linker/
 common/Core/
 
-#   编辑器/系统垃圾
+# ============ 本地配置（含 WiFi 密码/API Key 等机密）============
+# sdkconfig 是 menuconfig 的本地实物配置，绝不入库
+sdkconfig
+sdkconfig.old
+# 注意：sdkconfig.defaults 是脱敏模板（只有 IP/地址，无密码），必须入库。
+# 不要在这里写 sdkconfig.* 之类的通配规则，否则会误伤它。
+
+# ============ 编辑器/系统垃圾 ============
 .vscode/
 .idea/
 *.swp
 *~
 .DS_Store
 Thumbs.db
-
-#   本地配置
-sdkconfig
-sdkconfig.old
