@@ -1,19 +1,12 @@
 #ifndef UART_LINK_H
 #define UART_LINK_H
 
+/* 三端共用的帧协议（STM32 / ESP32 / PC 同一份实现） */
+#include "frame_protocol.h"
+
 #include <stdint.h>
 #include <stddef.h>
 
-#define FRAME_HEAD1         0xAA
-#define FRAME_HEAD2         0x55
-#define FRAME_MAX_PAYLOAD   64
-
-//命令字典
-#define CMD_TEMP_HUM        0x01
-#define CMD_HEARTBEAT       0x02
-#define CMD_SERVO           0x10
-#define CMD_LED             0x11
-#define CMD_OLED_TEXT       0x20
 
 //对外接口函数
 void uart_link_init(void);

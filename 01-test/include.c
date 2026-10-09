@@ -22,20 +22,9 @@ uint16_t oled_sda_pin = GPIO_PIN_7;   //oled屏1数据引脚在PB7
 //前7位地址0111100(0x3c)左移1位+写标志位(0) = 0x78,读地址为0x79
 uint8_t oled_addr = 0x78;
 
-//uart帧状态机定义
-typedef enum 
-{
-    S_HEAD1,
-    S_HEAD2,
-    S_LEN,
-    S_CMD,
-    S_DATA,
-    S_SUM
-}rx_state_t;
-static rx_state_t s_state = S_HEAD1;
-//帧解析缓冲区
-static uint8_t s_payload[FRAME_MAX_PAYLOAD];
-static uint8_t s_len, s_cmd, s_sum, s_idx;
+/* 总线空闲标志：IDLE 中断置位，解析任务消费后调用 frame_parser_resync()。
+ * 只在中断里置标志、在任务里复位解析器，避免两处同时操作解析器状态造成竞态。 */
+static volatile uint8_t s_uart_idle = 0;
 
 //记录解析丢包次数
 uint16_t frame_drop_cnt = 0;
@@ -153,63 +142,17 @@ uint8_t usart1_recv_byte(void)
     while(!(USART1->SR & USART_SR_RXNE));
     return USART1->DR;
 }
-//中断单字节收集一帧
-void uart_feed_byte(uint8_t b)
+/* 解析任务查询：是否发生过总线空闲 */
+uint8_t uart_take_idle_flag(void)
 {
-    switch (s_state)
+    if (s_uart_idle)
     {
-    case S_HEAD1:
-        if (b == FRAME_HEAD1)
-        {
-            s_state = S_HEAD2;
-        }
-        break;
-    case S_HEAD2:
-        s_state = (b == FRAME_HEAD2) ? S_LEN : S_HEAD1;
-        break;
-    case S_LEN:
-        s_len = b;
-        if (s_len > FRAME_MAX_PAYLOAD)
-        { 
-            s_state = S_HEAD1;
-            break; 
-        }
-        s_sum = b;
-        s_idx = 0;
-        s_state = S_CMD;
-        break;
-    case S_CMD:
-        s_cmd = b;
-        s_sum ^= b;
-        s_state = (s_len == 0) ? S_SUM : S_DATA;
-        break;
-    case S_DATA:
-        s_payload[s_idx++] = b;
-        s_sum ^= b;
-        if (s_idx >= s_len)
-        {
-            s_state = S_SUM;
-        }
-        break;
-    case S_SUM:
-        s_state = S_HEAD1;
-        if (b == s_sum)
-        {
-            //校验通过
-            uart_frame_t f;                 //声明临时栈堆
-            f.cmd = s_cmd;                  //把命令拷贝进临时堆
-            f.len = s_len;                  //数据长度拷贝进临时堆
-            memcpy(f.payload, s_payload, s_len);    //深度拷贝，确保操作的数据是想操作的
-            //把数据放入消息队列
-            if(xQueueSend(xRxQueue, &f, 0) != pdPASS)
-            {
-                //记录丢包次数
-                frame_drop_cnt++;
-            }
-        }
-        break;
+        s_uart_idle = 0;
+        return 1;
     }
+    return 0;
 }
+
 //dma把数据放入rx_buf缓冲区中，把它取出放入g_rb中
 static void rx_process(uint16_t start, uint16_t end)
 {
@@ -219,18 +162,15 @@ static void rx_process(uint16_t start, uint16_t end)
 //uart发送帧
 void usart1_send_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
 {
-    uint8_t sum = len ^ cmd;
+    uint8_t frame[FRAME_MAX_PAYLOAD + 5];
+    int n = frame_build(cmd, payload, len, frame, sizeof(frame));
 
-    usart1_send_byte(FRAME_HEAD1);
-    usart1_send_byte(FRAME_HEAD2);
-    usart1_send_byte(len);
-    usart1_send_byte(cmd);
-    for (uint8_t i = 0; i < len; i++)
+    if (n < 0) return;                      /* 参数非法 */
+
+    for (int i = 0; i < n; i++)
     {
-        usart1_send_byte(payload[i]);
-        sum ^= payload[i];
+        usart1_send_byte(frame[i]);
     }
-    usart1_send_byte(sum);
 }
 //dma2中断入口函数
 void DMA2_Stream2_IRQHandler(void)
@@ -281,16 +221,9 @@ void USART1_IRQHandler(void)
         tmp = USART1->DR;
         (void)tmp;
 
-        //数据没传满半个缓冲区就停了则在空闲中断里把这些数据搬了
-        uint16_t pos = RX_BUF_SIZE - DMA2_Stream2->NDTR;
-        if(pos > rx_watermark)
-        {
-            //搬数据
-            rx_process(rx_watermark, pos);
-            rx_watermark = pos;
-            //数据传完了直接释放信号量
-            xSemaphoreGiveFromISR(xDataSem, &xHigherPriorityTaskWoken);
-        }
+        /* DMA 中断里已经把数据搬进 ring buffer 了，
+         * 这里只需告诉解析任务"这批数据到此为止，可以丢弃残留半帧" */
+        s_uart_idle = 1;
     
     }
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);

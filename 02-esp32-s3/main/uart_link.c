@@ -18,113 +18,52 @@
 
 #define LINK_TIMEOUT_MS 3000    //3s没消息算超时
 
-//帧解析状态机，用来记录接收程序读取到哪一帧
-typedef enum{
-    S_HEAD1,    //正在等待帧的第1个头字节 
-    S_HEAD2,    //正在等待帧的第2个头字节
-    S_LEN,      //正在读取数据长度
-    S_CMD,      //正在读取命令码
-    S_DATA,     //正在读取数据负载
-    S_SUM       //正在读取校验和
-}rx_state_t;
-
-//每一帧的状态
-static rx_state_t s_state = S_HEAD1;            //告诉程序收到的下一个字节应该做什么(帧头，长度，命令，数据)
-static uint8_t s_payload[FRAME_MAX_PAYLOAD];    //数据负载缓冲区
-//s_len:存放刚刚解析出的数据负载长度;
-//s_cmd:存放刚刚解析出的命令码;
-//s_sum:运行中的异或校验和;
-//s_idx:负载数组的写入索引
-static uint8_t s_len, s_cmd, s_sum, s_idx;
-
-
-static uart_link_cb_t s_cb = NULL;
 static const char *TAG = "uart_link";
 
-//链路状态监控
-static int64_t s_last_rx_ms = 0;        //上次收到数据的打卡时间
-static bool s_link_lost = false;        //当前链路的通断状态
+/* 协议解析器实例 */
+static frame_parser_t s_parser;
 
-//一个字节一个字节的收取并判断，满足一帧要求则返回true
-static bool uart_feed_byte(uint8_t b)
-{
-    switch(s_state)
-    {
-        case S_HEAD1:       //判断是否第一个头
-            if(b == FRAME_HEAD1)
-            {
-                s_state = S_HEAD2;      //进入第二头
-            }
-            break;
-        
-        case S_HEAD2:       //等待第二个头
-            s_state = (b == FRAME_HEAD2) ? S_LEN : S_HEAD1;     //若为第二个头则进入读数据长度，不是则舍弃第一个头
-            break;
+/* 收到完整帧的回调（上层注册） */
+static uart_link_cb_t s_cb = NULL;
 
-        case S_LEN:         //等待数据长度
-            s_len = b;
-            //若发送的数据长度超过了负载则直接拒收
-            if(s_len > FRAME_MAX_PAYLOAD)
-            {
-                s_state = S_HEAD1;
-                break;
-            }
-            s_sum = b;      //检验和的第一个异或为数据长度
-            s_idx = 0;
-            s_state = S_CMD;
-            break;
+/* 链路监控 */
+static int64_t s_last_rx_ms = 0;
+static bool    s_link_lost  = false;
 
-        case S_CMD:
-            s_cmd = b;
-            s_sum ^= b;     //第二给校验位命令位异或进去
-            s_state = (s_len == 0) ? S_SUM : S_DATA;    //如果数据长度为0，则跳过数据区，进入检验位
-            break;
-
-        case S_DATA:
-            s_payload[s_idx++] = b;     //把数据存入负载缓冲区
-            s_sum ^= b;                 //异或数据位
-            if(s_idx >= s_len)          //数据收集满了，则进入校验位
-            {
-                s_state = S_SUM;
-            }
-            break;
-
-        case S_SUM:
-            s_state = S_HEAD1;      //准备下一帧
-            if(b == s_sum)          //比较校验和
-            {
-                if(s_cb)        //确定存在操作函数
-                {
-                    //对数据进行处理
-                    s_cb(s_cmd, s_payload, s_len);
-                }
-                return true;
-            }
-            ESP_LOGW(TAG, "和校验错误:得到:0x%02x,想要:0x%02x", b, s_sum);
-            break;
-    }
-    return false;
-}
+/* 读超时时间 = 判定"总线空闲/帧间隔"的阈值（毫秒）
+ * 大于一个字节的传输时间即可；115200 下 1 字节 ≈ 0.09ms，取 20ms  */
+#define FRAME_GAP_MS  20
 
 //接收任务
 static void uart_rx_task(void *arg)
 {
     uint8_t buf[128];
+    frame_t f;
 
     for(;;)
     {
         //获取收到的字节数n,从UART_PORT串口获取,获取的数据放入buf,大小为buf大小,50ms没数据就走
-        int n = uart_read_bytes(UART_PORT, buf, sizeof(buf), pdMS_TO_TICKS(50));
+        int n = uart_read_bytes(UART_PORT, buf, sizeof(buf), pdMS_TO_TICKS(FRAME_GAP_MS));
         if(n>0)     //有数据时
         {
             s_last_rx_ms = esp_timer_get_time() / 1000;
             for(int i = 0;i < n; i++)
             {
-                //由于与发送方定义的是：数据是一个字节一个字节的发，所以可以一个字节一个字节的校验
-                uart_feed_byte(buf[i]);
+                if (frame_parser_feed(&s_parser, buf[i], &f) == FRAME_OK)
+                {
+                    if (s_cb) s_cb(f.cmd, f.payload, f.len);
+                }
             }
         }
+        else
+        {
+            /* ★ 读超时 = 一段时间没数据 = 总线空闲
+             *   等价于 STM32 侧的 USART IDLE 中断：丢弃被截断的半帧，
+             *   避免下一帧被错位吞掉 */
+            frame_parser_resync(&s_parser);
+        }
 
+        //链路断线检测
         int64_t now = esp_timer_get_time() / 1000;
         bool lost = (s_last_rx_ms > 0) && ((now - s_last_rx_ms) >LINK_TIMEOUT_MS);
         if(lost != s_link_lost)
@@ -145,6 +84,8 @@ static void uart_rx_task(void *arg)
 //UART硬件初始化
 void uart_link_init(void)
 {
+    frame_parser_init(&s_parser);
+    
     uart_config_t cfg =
     {
         .baud_rate = BAUD_RATE,                     //115200
@@ -175,32 +116,14 @@ void uart_link_start(void)
 //发送帧组装
 void uart_link_send_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
 {
-    //帧头2个,LEN,CMD,SUM
+    //组帧逻辑复用三端共用的 frame_build()，不再手工拼字节
     uint8_t frame[FRAME_MAX_PAYLOAD + 5];
-    uint8_t sum = len ^ cmd;
-    uint8_t i = 0;
+    int n = frame_build(cmd, payload, len, frame, sizeof(frame));
 
-    //截断保护
-    if(len > FRAME_MAX_PAYLOAD)
-    {
-        len = FRAME_MAX_PAYLOAD;
-    }
+    if (n < 0) return;      //参数非法（负载超长或缓冲不足）
 
-    frame[i++] = FRAME_HEAD1;
-    frame[i++] = FRAME_HEAD2;
-    frame[i++] = len;
-    frame[i++] = cmd;
-
-    for(uint8_t j = 0; j < len; j++)
-    {
-        frame[i] = payload[j];
-        sum ^= payload[j];
-        i++;
-    }
-    frame[i++] = sum;
-
-    //把组装好的帧frame写入发送缓冲区
-    uart_write_bytes(UART_PORT, frame, i);
+    //把组装好的帧写入发送缓冲区
+    uart_write_bytes(UART_PORT, frame, n);
     ESP_LOGD(TAG, "TX:cmd=0x%02x len=%d", cmd, len);
 
 }

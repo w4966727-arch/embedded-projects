@@ -8,6 +8,10 @@
 #include "event_groups.h"
 #include "timers.h"
 
+/* 协议解析器实例（状态从 include.c 的 static 变量搬到这里，
+ * 由解析任务独占访问，无竞态） */
+static frame_parser_t s_parser;
+
 //同步对象
 QueueHandle_t       xRxQueue;                   //存储消息队列的句柄
 SemaphoreHandle_t   xOledMutex;                 //oled外设互斥锁
@@ -33,15 +37,27 @@ static void vTaskParse(void *pvParameters)
 {
     (void)pvParameters;
     uint8_t b;
-    for(;;)
-    {
-        //把环形缓冲区解析并送入帧缓冲区中
-        if(xSemaphoreTake(xDataSem, portMAX_DELAY))
-        {
-            while(ringbuf_pop(&g_rb, &b))
-            {
-                uart_feed_byte(b);
+    frame_t f;
 
+    for (;;)
+    {
+        /* 阻塞等"DMA 搬了一批数据"的计数信号量 */
+        if (xSemaphoreTake(xDataSem, portMAX_DELAY) == pdTRUE)
+        {
+            /* 把 ring buffer 里积压的字节全部消费完 */
+            while (ringbuf_pop(&g_rb, &b))
+            {
+                if (frame_parser_feed(&s_parser, b, &f) == FRAME_OK)
+                {
+                    xQueueSend(xRxQueue, &f, 0);
+                }
+            }
+
+            /* 期间总线空闲过 → 丢弃可能残留的半帧
+             * （对应 STM32 的 IDLE 中断 / ESP32 的读超时） */
+            if (uart_take_idle_flag())
+            {
+                frame_parser_resync(&s_parser);
             }
         }
     }
@@ -50,7 +66,7 @@ static void vTaskParse(void *pvParameters)
 static void vTaskUart(void *pvParameters)
 {
     (void)pvParameters;
-    uart_frame_t f;
+    frame_t f;
     
     //保存句柄，供心跳定时器做任务通知
     xUartTaskHandle = xTaskGetCurrentTaskHandle();
@@ -102,6 +118,7 @@ static void vTaskSensor(void *pvParameters)
 {
     (void)pvParameters;
     TickType_t last = xTaskGetTickCount();
+    char buf[16];
 
     for(;;)
     {
@@ -121,6 +138,14 @@ static void vTaskSensor(void *pvParameters)
         xSemaphoreTake(xUartTxMutex, portMAX_DELAY);
         usart1_send_frame(CMD_TEMP_HUM, th, 4);
         xSemaphoreGive(xUartTxMutex);
+
+        //OLED屏显示温湿度（便于直接观察采集与上报是否正常）
+        xSemaphoreTake(xOledMutex, portMAX_DELAY);
+        sprintf(buf, "T:%d.%d", t / 10, (t < 0 ? -t : t) % 10);
+        oled_show_string(0, 4, buf);
+        sprintf(buf, "H:%d.%d", h / 10, h % 10);
+        oled_show_string(0, 6, buf);
+        xSemaphoreGive(xOledMutex);
 
         //事件组更新，告诉显示任务：温湿度更新了
         xEventGroupSetBits(xSysEvents, EVT_TEMP_READY);
@@ -195,7 +220,7 @@ int main(void)
 
 
     //创建消息队列
-    xRxQueue = xQueueCreate(4, sizeof(uart_frame_t));
+    xRxQueue = xQueueCreate(4, sizeof(frame_t));
     //oled屏幕外设互斥锁
     xOledMutex = xSemaphoreCreateMutex();
     //uarttx互斥锁
@@ -230,6 +255,8 @@ int main(void)
 
     //dma2中断初始化
     uart1_dma_init();
+    /* 初始化协议解析器 */
+    frame_parser_init(&s_parser);
 
     //创建任务并分配优先级
     //参数：任务函数，任务昵称(自定)，堆栈大小(单位为字:4个字节)，传参，优先级(越大优先级越高)，任务句柄

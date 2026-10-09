@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STM32 + ESP32 双板监测看板</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/mqtt@5.3.5/dist/mqtt.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #0f1720; color: #e6edf3;
+  }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: #7d8590; font-size: 13px; margin-bottom: 20px; }
+  .status-bar {
+    display: flex; align-items: center; gap: 8px;
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 10px 14px; margin-bottom: 20px; font-size: 14px;
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #f85149; }
+  .dot.on { background: #3fb950; box-shadow: 0 0 8px #3fb95088; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card {
+    background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 18px;
+  }
+  .card .label { color: #7d8590; font-size: 13px; margin-bottom: 8px; }
+  .card .value { font-size: 32px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .card .unit { font-size: 15px; color: #7d8590; margin-left: 4px; }
+  .card.temp .value { color: #f0883e; }
+  .card.hum  .value { color: #58a6ff; }
+  .card.stat .value { font-size: 22px; }
+  .chart-box {
+    background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+    padding: 18px; margin-bottom: 24px; height: 340px;
+  }
+  .log-box {
+    background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+    padding: 14px 18px; height: 180px; overflow-y: auto;
+    font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; line-height: 1.7;
+  }
+  .log-box .t { color: #7d8590; }
+  .log-box .topic { color: #a371f7; }
+  .log-box .val { color: #3fb950; }
+</style>
+</head>
+<body>
+
+<h1>STM32F411 + ESP32-S3 双板监测看板</h1>
+<div class="sub">UART 帧协议 → ESP32-S3 中枢 → MQTT → 浏览器实时可视化</div>
+
+<div class="status-bar">
+  <span class="dot" id="brokerDot"></span>
+  <span id="brokerText">正在连接 broker…</span>
+  <span style="margin-left:auto" class="dot" id="devDot"></span>
+  <span id="devText">设备离线</span>
+</div>
+
+<div class="cards">
+  <div class="card temp">
+    <div class="label">温度 (stm32/temp)</div>
+    <div class="value"><span id="tempVal">--</span><span class="unit">°C</span></div>
+  </div>
+  <div class="card hum">
+    <div class="label">湿度 (stm32/hum)</div>
+    <div class="value"><span id="humVal">--</span><span class="unit">%</span></div>
+  </div>
+  <div class="card stat">
+    <div class="label">设备状态 (esp32/status)</div>
+    <div class="value" id="devStatus">--</div>
+  </div>
+  <div class="card stat">
+    <div class="label">累计消息数</div>
+    <div class="value" id="msgCount">0</div>
+  </div>
+</div>
+
+<div class="chart-box">
+  <canvas id="chart"></canvas>
+</div>
+
+<div class="log-box" id="log"></div>
+
+<script>
+/* ============ 配置 ============ */
+const BROKER_WS = 'ws://192.168.137.1:9001';   /* mosquitto 的 WebSocket 端口 */
+const TOPIC_TEMP = 'stm32/temp';
+const TOPIC_HUM  = 'stm32/hum';
+const TOPIC_STAT = 'esp32/status';
+const MAX_POINTS = 60;                          /* 曲线上最多保留 60 个点 */
+
+/* ============ 图表初始化 ============ */
+const ctx = document.getElementById('chart').getContext('2d');
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      {
+        label: '温度 (°C)',
+        data: [],
+        borderColor: '#f0883e',
+        backgroundColor: 'rgba(240,136,62,0.12)',
+        borderWidth: 2, tension: 0.35, fill: true, pointRadius: 0,
+        yAxisID: 'y'
+      },
+      {
+        label: '湿度 (%)',
+        data: [],
+        borderColor: '#58a6ff',
+        backgroundColor: 'rgba(88,166,255,0.10)',
+        borderWidth: 2, tension: 0.35, fill: true, pointRadius: 0,
+        yAxisID: 'y1'
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { labels: { color: '#e6edf3' } }
+    },
+    scales: {
+      x: { ticks: { color: '#7d8590', maxTicksLimit: 8 }, grid: { color: '#21262d' } },
+      y: {
+        position: 'left', title: { display: true, text: '温度 °C', color: '#f0883e' },
+        ticks: { color: '#f0883e' }, grid: { color: '#21262d' }
+      },
+      y1: {
+        position: 'right', title: { display: true, text: '湿度 %', color: '#58a6ff' },
+        ticks: { color: '#58a6ff' }, grid: { drawOnChartArea: false }
+      }
+    }
+  }
+});
+
+/* ============ 页面元素 ============ */
+const $ = id => document.getElementById(id);
+let msgCount = 0;
+let lastTemp = null, lastHum = null;
+
+function pushLog(topic, payload) {
+  const box = $('log');
+  const now = new Date().toLocaleTimeString('zh-CN');
+  const line = document.createElement('div');
+  line.innerHTML = `<span class="t">${now}</span> <span class="topic">${topic}</span> <span class="val">${payload}</span>`;
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+  if (box.childElementCount > 200) box.removeChild(box.firstChild);
+}
+
+function pushChart() {
+  if (lastTemp === null || lastHum === null) return;
+  const label = new Date().toLocaleTimeString('zh-CN');
+  chart.data.labels.push(label);
+  chart.data.datasets[0].data.push(lastTemp);
+  chart.data.datasets[1].data.push(lastHum);
+  if (chart.data.labels.length > MAX_POINTS) {
+    chart.data.labels.shift();
+    chart.data.datasets.forEach(d => d.data.shift());
+  }
+  chart.update();
+}
+
+/* ============ 连接 broker ============ */
+const client = mqtt.connect(BROKER_WS, { clientId: 'web-dashboard-' + Math.random().toString(16).slice(2, 8) });
+
+client.on('connect', () => {
+  $('brokerDot').classList.add('on');
+  $('brokerText').textContent = 'Broker 已连接 ' + BROKER_WS;
+  client.subscribe([TOPIC_TEMP, TOPIC_HUM, TOPIC_STAT], { qos: 0 });
+});
+
+client.on('reconnect', () => {
+  $('brokerDot').classList.remove('on');
+  $('brokerText').textContent = '正在重连 broker…';
+});
+
+client.on('error', (e) => {
+  $('brokerText').textContent = 'Broker 连接失败: ' + e.message;
+});
+
+client.on('message', (topic, payload) => {
+  const text = payload.toString();
+  msgCount++;
+  $('msgCount').textContent = msgCount;
+  pushLog(topic, text);
+
+  if (topic === TOPIC_TEMP) {
+    lastTemp = parseFloat(text);
+    $('tempVal').textContent = text;
+    pushChart();
+  } else if (topic === TOPIC_HUM) {
+    lastHum = parseFloat(text);
+    $('humVal').textContent = text;
+    pushChart();
+  } else if (topic === TOPIC_STAT) {
+    $('devStatus').textContent = text;
+    const online = (text === 'online');
+    $('devDot').classList.toggle('on', online);
+    $('devText').textContent = online ? '设备在线' : '设备离线';
+  }
+});
+</script>
+</body>
+</html>

@@ -1,6 +1,9 @@
 #ifndef INCLUDE_H
 #define INCLUDE_H
 
+/* 三端共用的帧协议（STM32 / ESP32 / PC 同一份实现） */
+#include "frame_protocol.h"
+
 #include "stm32f4xx_hal.h"
 #include "FreeRTOS.h"
 #include "queue.h"
@@ -12,26 +15,9 @@
 #define RX_BUF_SIZE     256
 
 
-//帧定义
-#define FRAME_HEAD1        0xAA
-#define FRAME_HEAD2        0x55
-#define FRAME_MAX_PAYLOAD  64
 
-#define CMD_TEMP_HUM   0x01
-#define CMD_HEARTBEAT  0x02
-#define CMD_SERVO      0x10
-#define CMD_LED        0x11
-#define CMD_OLED_TEXT  0x20
-//一帧完整结构
-typedef struct {
-    uint8_t cmd;
-    uint8_t len;
-    uint8_t payload[FRAME_MAX_PAYLOAD];
-} uart_frame_t;
 //发送一帧
 void usart1_send_frame(uint8_t cmd, const uint8_t *payload, uint8_t len);
-
-
 
 extern GPIO_TypeDef *led_port;
 extern uint16_t led_pin;
@@ -101,8 +87,6 @@ uint8_t usart1_rx_ready(void);
 //发送数据
 void usart1_send_byte(uint8_t c);
 //中断单字节收集一帧
-void uart_feed_byte(uint8_t b);
-
 //dma2初始化
 void uart1_dma_init(void);
 
@@ -114,6 +98,8 @@ void time_init(void);    //DWT时钟初始化
 uint32_t micros(void);    //微秒检测
 void delay_us(uint32_t us);
 
-
+/* 查询并清除"总线空闲"标志（IDLE 中断置位，解析任务消费）
+ * 用于丢弃被截断的半帧——字节流协议无法自行区分"帧没发完"和"帧被截断" */
+uint8_t uart_take_idle_flag(void);
 
 #endif

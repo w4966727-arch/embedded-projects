@@ -8,6 +8,7 @@ TARGET = 01-test
 ######################################
 # ???????????? ~/embedded-projects ???? make COMMON_DIR=/path ??
 COMMON_DIR ?= $(HOME)/embedded-projects/common
+PROTOCOL_DIR = ../protocol
 
 BUILD_DIR = build
 LDSCRIPT = $(COMMON_DIR)/Linker/STM32F411CEUx_FLASH.ld
@@ -19,6 +20,7 @@ C_SOURCES = \
 main.c \
 include.c \
 ringbuf.c \
+$(PROTOCOL_DIR)/frame_protocol.c \
 $(COMMON_DIR)/FreeRTOS/tasks.c \
 $(COMMON_DIR)/FreeRTOS/queue.c \
 $(COMMON_DIR)/FreeRTOS/list.c \
@@ -65,6 +67,7 @@ C_DEFS = -DUSE_HAL_DRIVER -DSTM32F411xE
 # ?????
 C_INCLUDES = \
 -I. \
+-I$(PROTOCOL_DIR) \
 -I$(COMMON_DIR)/Core \
 -I$(COMMON_DIR)/Drivers/STM32F4xx_HAL_Driver/Inc \
 -I$(COMMON_DIR)/Drivers/STM32F4xx_HAL_Driver/Inc/Legacy \

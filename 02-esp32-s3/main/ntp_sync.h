@@ -1,5 +1,5 @@
-#ifndef NTP_SYNC.H
-#define NTP_SYNC.H
+#ifndef NTP_SYNC_H
+#define NTP_SYNC_H
 
 #include <stdbool.h>
 #include <stdint.h>
