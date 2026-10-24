@@ -44,6 +44,24 @@
   .log-box .t { color: #7d8590; }
   .log-box .topic { color: #a371f7; }
   .log-box .val { color: #3fb950; }
+
+  /* ── 控制面板 ── */
+  .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .ctl-card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 18px; }
+  .ctl-label { color: #7d8590; font-size: 13px; margin-bottom: 12px; }
+  .ctl-label .topic { color: #a371f7; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .swatches { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .swatch { width: 36px; height: 36px; border-radius: 50%; border: 2px solid #30363d; cursor: pointer; transition: transform .12s, border-color .12s; }
+  .swatch:hover { transform: scale(1.12); border-color: #8b949e; }
+  .swatch.off { background: #21262d; color: #7d8590; font-size: 12px; }
+  .btn-row { display: flex; gap: 10px; margin-bottom: 14px; }
+  .btn { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #30363d; background: #21262d; color: #e6edf3; font-size: 14px; cursor: pointer; transition: background .15s; }
+  .btn:hover { background: #30363d; }
+  .btn.on { border-color: #3fb95088; } .btn.on:hover { background: #1f6f3f; }
+  .btn.off { border-color: #f8514988; } .btn.off:hover { background: #6e2b2b; }
+  .ctl-state { color: #7d8590; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  .ctl-state .val { color: #e6edf3; font-family: ui-monospace, Consolas, monospace; }
+  .led-preview { width: 14px; height: 14px; border-radius: 50%; background: #30363d; border: 1px solid #484f58; }
 </style>
 </head>
 <body>
@@ -77,6 +95,33 @@
   </div>
 </div>
 
+<div class="controls">
+  <!-- ESP32 本地 WS2812 灯 -->
+  <div class="ctl-card">
+    <div class="ctl-label">ESP32 RGB 灯 · 发布 <span class="topic">esp32/cmd</span></div>
+    <div class="swatches">
+      <button class="swatch" data-cmd="color 255 0 0"   style="background:#ff3b30" title="红"></button>
+      <button class="swatch" data-cmd="color 0 255 0"   style="background:#30d158" title="绿"></button>
+      <button class="swatch" data-cmd="color 0 128 255" style="background:#0a84ff" title="蓝"></button>
+      <button class="swatch" data-cmd="color 255 200 0" style="background:#ffd60a" title="黄"></button>
+      <button class="swatch" data-cmd="color 180 0 255" style="background:#bf5af2" title="紫"></button>
+      <button class="swatch" data-cmd="color 255 255 255" style="background:#ffffff" title="白"></button>
+      <button class="swatch off" data-cmd="color off" title="关闭">关</button>
+    </div>
+    <div class="ctl-state">当前状态: <span class="led-preview" id="espLedPreview"></span> <span class="val" id="espLedState">--</span></div>
+  </div>
+
+  <!-- STM32 小灯 -->
+  <div class="ctl-card">
+    <div class="ctl-label">STM32 小灯 · 发布 <span class="topic">stm32/cmd</span></div>
+    <div class="btn-row">
+      <button class="btn on" id="stmLedOn">开</button>
+      <button class="btn off" id="stmLedOff">关</button>
+    </div>
+    <div class="ctl-state">当前状态: <span class="led-preview" id="stmLedPreview"></span> <span class="val" id="stmLedState">--</span></div>
+  </div>
+</div>
+
 <div class="chart-box">
   <canvas id="chart"></canvas>
 </div>
@@ -89,6 +134,8 @@ const BROKER_WS = 'ws://192.168.137.1:9001';   /* mosquitto 的 WebSocket 端口
 const TOPIC_TEMP = 'stm32/temp';
 const TOPIC_HUM  = 'stm32/hum';
 const TOPIC_STAT = 'esp32/status';
+const TOPIC_LED_ESP32 = 'esp32/led';   /* ESP32 本地 WS2812 状态 */
+const TOPIC_LED_STM32 = 'stm32/led';   /* STM32 小灯状态（回帧确认） */
 const MAX_POINTS = 60;                          /* 曲线上最多保留 60 个点 */
 
 /* ============ 图表初始化 ============ */
@@ -172,7 +219,7 @@ const client = mqtt.connect(BROKER_WS, { clientId: 'web-dashboard-' + Math.rando
 client.on('connect', () => {
   $('brokerDot').classList.add('on');
   $('brokerText').textContent = 'Broker 已连接 ' + BROKER_WS;
-  client.subscribe([TOPIC_TEMP, TOPIC_HUM, TOPIC_STAT], { qos: 0 });
+  client.subscribe([TOPIC_TEMP, TOPIC_HUM, TOPIC_STAT, TOPIC_LED_ESP32, TOPIC_LED_STM32], { qos: 0 });
 });
 
 client.on('reconnect', () => {
@@ -203,7 +250,41 @@ client.on('message', (topic, payload) => {
     const online = (text === 'online');
     $('devDot').classList.toggle('on', online);
     $('devText').textContent = online ? '设备在线' : '设备离线';
+  } else if (topic === TOPIC_LED_ESP32) {
+    /* 本地灯状态："r,g,b" */
+    const rgb = text.split(',').map(Number);
+    $('espLedState').textContent = text;
+    const pv = $('espLedPreview');
+    pv.style.background = `rgb(${rgb[0] || 0},${rgb[1] || 0},${rgb[2] || 0})`;
+    pv.style.boxShadow = (rgb[0] + rgb[1] + rgb[2] > 0) ? `0 0 8px rgb(${rgb[0]},${rgb[1]},${rgb[2]})` : 'none';
+  } else if (topic === TOPIC_LED_STM32) {
+    /* STM32 灯状态："1" / "0" */
+    const on = (text === '1');
+    $('stmLedState').textContent = on ? '亮' : '灭';
+    const pv = $('stmLedPreview');
+    pv.style.background = on ? '#3fb950' : '#30363d';
+    pv.style.boxShadow = on ? '0 0 8px #3fb950' : 'none';
   }
+});
+
+/* ============ 控制面板事件绑定 ============ */
+/* ESP32 配色按钮：把命令发到 esp32/cmd */
+document.querySelectorAll('.swatch').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const cmd = btn.dataset.cmd;
+    client.publish('esp32/cmd', cmd, { qos: 1 });
+    pushLog('esp32/cmd (发送)', cmd);
+  });
+});
+
+/* STM32 小灯开关：把命令发到 stm32/cmd */
+document.getElementById('stmLedOn').addEventListener('click', () => {
+  client.publish('stm32/cmd', 'led on', { qos: 1 });
+  pushLog('stm32/cmd (发送)', 'led on');
+});
+document.getElementById('stmLedOff').addEventListener('click', () => {
+  client.publish('stm32/cmd', 'led off', { qos: 1 });
+  pushLog('stm32/cmd (发送)', 'led off');
 });
 </script>
 </body>

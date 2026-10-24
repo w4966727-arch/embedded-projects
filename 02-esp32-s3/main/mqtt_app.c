@@ -5,6 +5,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "mqtt_client.h"
+#include "uart_link.h"
+#include "ws2812.h"
 #include "esp_log.h"
 
 #define MQTT_CONNECTED_BIT BIT0
@@ -15,14 +17,77 @@ static esp_mqtt_client_handle_t s_client = NULL;
 static EventGroupHandle_t s_mqtt_events = NULL;
 static volatile bool s_connected = false;
 
-//收到命令
+/* 发布本地 WS2812 状态（QoS0 + retain：新订阅者立即可见） */
+static void publish_led_state(uint8_t r, uint8_t g, uint8_t b)
+{
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d,%d,%d", r, g, b);
+    mqtt_app_publish("esp32/led", buf, 0, 1);
+}
+
+/**
+ * 收到命令：按 topic 区分目标设备
+ *
+ *   esp32/cmd  → 本地 WS2812（color R G B / color off）
+ *   stm32/cmd  → 转发给 STM32（led on / led off），走 UART 帧协议
+ */
 static void mqtt_handle_command(const char *topic, int topic_len,
                                 const char *data, int data_len)
 {
-    ESP_LOGI(TAG, "收到命令 topic=%.*s data=%.*s",
-                topic_len, topic, data_len, data);
+    /* ① MQTT payload 不是以 '\0' 结尾的，先拷贝成 C 字符串 */
+    char cmd[64];
+    int n = (data_len < (int)sizeof(cmd) - 1) ? data_len : (int)sizeof(cmd) - 1;
+    memcpy(cmd, data, n);
+    cmd[n] = '\0';
 
-    //
+    ESP_LOGI(TAG, "命令 topic=%.*s cmd=\"%s\"", topic_len, topic, cmd);
+
+    int r, g, b;
+
+    /* ② 按主题分派 */
+    if (topic_len == 9 && strncmp(topic, "esp32/cmd", 9) == 0)
+    {
+        /* ── 本地 WS2812 ── */
+        if (strcmp(cmd, "color off") == 0)
+        {
+            ws2812_off();
+            publish_led_state(0, 0, 0);
+        }
+        else if (sscanf(cmd, "color %d %d %d", &r, &g, &b) == 3)
+        {
+            /* 参数钳位，防止越界值 */
+            r = (r < 0) ? 0 : (r > 255 ? 255 : r);
+            g = (g < 0) ? 0 : (g > 255 ? 255 : g);
+            b = (b < 0) ? 0 : (b > 255 ? 255 : b);
+            ws2812_set_rgb((uint8_t)r, (uint8_t)g, (uint8_t)b);
+            publish_led_state((uint8_t)r, (uint8_t)g, (uint8_t)b);
+        }
+        else
+        {
+            ESP_LOGW(TAG, "未知本地命令: %s", cmd);
+        }
+    }
+    else if (topic_len == 9 && strncmp(topic, "stm32/cmd", 9) == 0)
+    {
+        /* ── 转发给 STM32（走 UART 帧协议，CMD_LED 0x11）── */
+        uint8_t v;
+        if (strcmp(cmd, "led on") == 0)
+        {
+            v = 1;
+            uart_link_send_frame(CMD_LED, &v, 1);
+            ESP_LOGI(TAG, "已转发: LED ON → STM32");
+        }
+        else if (strcmp(cmd, "led off") == 0)
+        {
+            v = 0;
+            uart_link_send_frame(CMD_LED, &v, 1);
+            ESP_LOGI(TAG, "已转发: LED OFF → STM32");
+        }
+        else
+        {
+            ESP_LOGW(TAG, "未知 STM32 命令: %s", cmd);
+        }
+    }
 }
 //时间处理
 static void mqtt_event_handler(void *args, esp_event_base_t base,
@@ -47,6 +112,7 @@ static void mqtt_event_handler(void *args, esp_event_base_t base,
             //向broker订阅"esp32/cmd"这个主题,之后有设备往这个主题发消息都会发送过来
             //qos等级为1
             esp_mqtt_client_subscribe(s_client, "esp32/cmd", 1);
+            esp_mqtt_client_subscribe(s_client, "stm32/cmd", 1);
 
             //广播
             xEventGroupSetBits(s_mqtt_events, MQTT_CONNECTED_BIT);

@@ -7,6 +7,7 @@
 #include "wifi_app.h"
 #include "ntp_sync.h"
 #include "mqtt_app.h"
+#include "ws2812.h"
 
 static const char *TAG = "app";
 
@@ -36,6 +37,19 @@ static void on_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
             ESP_LOGI(TAG, "stm32 heartbeat");
             break;
         }
+        case CMD_LED_STATE:
+        {
+            /* STM32 执行完灯光命令后的状态回帧 —— 真正的"状态回读" */
+            if (len != 1)
+            {
+                break;
+            }
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d", payload[0] ? 1 : 0);
+            mqtt_app_publish("stm32/led", buf, 0, 1);
+            ESP_LOGI(TAG, "STM32 上报 LED 状态: %s", buf);
+            break;
+        }
         default:
         {
             ESP_LOGW(TAG, "unknow cmd 0x%02x len=%d", cmd, len);
@@ -46,6 +60,13 @@ static void on_frame(uint8_t cmd, const uint8_t *payload, uint8_t len)
 
 void app_main(void)
 {
+    /* ① 板载 WS2812 硬件验证（最先执行，上电即可见）
+     *    红 → 绿 → 蓝 → 白 → 灭，每色 0.8s */
+    if (ws2812_init() == ESP_OK)
+    {
+        ws2812_test_sequence();
+    }
+
     //初始化uart通信
     uart_link_init();
     //确认数据无误后用回调函数操作数据

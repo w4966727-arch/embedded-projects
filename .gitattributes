@@ -1,0 +1,49 @@
+# ============================================================
+# ?????????????????? LF ??
+# ??????????? clone/checkout???????? LF
+# ????.gitattributes?????> core.autocrlf?????
+# ============================================================
+
+# ???? Git ??????/???????? LF
+* text=auto eol=lf
+
+# ---------- ?????????? LF ----------
+*.c               text eol=lf
+*.h               text eol=lf
+*.cpp             text eol=lf
+*.hpp             text eol=lf
+*.s               text eol=lf
+*.ld              text eol=lf
+*.cmake           text eol=lf
+CMakeLists.txt    text eol=lf
+*.yml             text eol=lf
+*.yaml            text eol=lf
+*.json            text eol=lf
+Kconfig*          text eol=lf
+*.projbuild       text eol=lf
+Makefile          text eol=lf
+*.mk              text eol=lf
+
+# ---------- ???????? LF ----------
+*.md              text eol=lf
+*.txt             text eol=lf
+*.sh              text eol=lf
+.gitignore        text eol=lf
+.gitattributes    text eol=lf
+
+# ---------- Windows ??????? CRLF??? cmd.exe ???? ----------
+*.bat             text eol=crlf
+*.cmd             text eol=crlf
+
+# ---------- ??????????????? ----------
+*.bin             binary
+*.elf             binary
+*.hex             binary
+*.o               binary
+*.a               binary
+*.png             binary
+*.jpg             binary
+*.jpeg            binary
+*.gif             binary
+*.pdf             binary
+*.zip             binary

@@ -11,6 +11,7 @@
 /*命令码*/
 #define CMD_TEMP_HUM        0x01
 #define CMD_HEARTBEAT       0x02
+#define CMD_LED_STATE       0x03
 #define CMD_SERVO           0x10
 #define CMD_LED             0x11
 #define CMD_OLED_TEXT        0x20

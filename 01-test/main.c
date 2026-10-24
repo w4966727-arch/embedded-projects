@@ -31,6 +31,9 @@ static TaskHandle_t xUartTaskHandle = NULL;
 //共享计数
 static volatile uint32_t s_frame_cnt = 0;
 
+//小灯当前状态（支持状态回读）
+static uint8_t s_led_state = 0;
+
 
 //任务1:协议解析
 static void vTaskParse(void *pvParameters)
@@ -87,7 +90,15 @@ static void vTaskUart(void *pvParameters)
             case CMD_LED:
                 if (f.len == 1)
                 {
+                    //执行动作并记录状态
                     (f.payload[0] ? light_on() : light_off());
+                    s_led_state = f.payload[0] ? 1 : 0;
+
+                    //回帧确认：告诉 ESP32 执行结果（真正的状态回读）
+                    uint8_t st = s_led_state;
+                    xSemaphoreTake(xUartTxMutex, portMAX_DELAY);
+                    usart1_send_frame(CMD_LED_STATE, &st, 1);
+                    xSemaphoreGive(xUartTxMutex);
                 }
                 break;
             case CMD_OLED_TEXT:
